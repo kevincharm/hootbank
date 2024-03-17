@@ -36,6 +36,7 @@ export default function App({ Component, pageProps }: AppProps) {
         <NoSSR>
             <ChakraProvider>
                 <Web3ModalProvider>
+                    <w3m-button />
                     <Component {...pageProps} />
                 </Web3ModalProvider>
             </ChakraProvider>
