@@ -1,5 +1,14 @@
 'use client'
-import { Box, Button, Input, Text } from '@chakra-ui/react'
+import {
+    Alert,
+    AlertDescription,
+    AlertIcon,
+    AlertTitle,
+    Box,
+    Button,
+    Input,
+    Text,
+} from '@chakra-ui/react'
 import { useReadContract, useWaitForTransactionReceipt, useWriteContract } from 'wagmi'
 import DelayABI from '../abis/Delay'
 import { encodeFunctionData, erc20Abi, formatUnits, parseUnits } from 'viem'
@@ -105,6 +114,7 @@ export function Order({
                 ...quote,
                 from: safeAddress,
                 receiver: safeAddress,
+                validTo: Math.floor(Date.now() / 1000) + 60 * 5 /** 5min */,
                 signature: '0x',
                 signingScheme: SigningScheme.PRESIGN,
             })
@@ -138,7 +148,11 @@ export function Order({
         })
     }, [delayModuleAddress, preSignCalldata])
 
-    const { writeContract: _execPreSign, status: execPreSignStatus } = useWriteContract({
+    const {
+        writeContract: _execPreSign,
+        status: execPreSignStatus,
+        error: execPreSignError,
+    } = useWriteContract({
         mutation: {
             onSuccess() {
                 onClose?.()
@@ -146,8 +160,8 @@ export function Order({
         },
     })
     const execPreSign = () => {
-        if (!preSignCalldata || !txCooldown) return
-        console.log('Executing presign...')
+        if (!orderId || !preSignCalldata || !txCooldown) return
+        console.log(`Presign ${orderId}`)
         _execPreSign({
             address: delayModuleAddress,
             abi: DelayABI,
@@ -240,6 +254,12 @@ export function Order({
                         </a>
                     </Box>
                 </Box>
+            )}
+            {execPreSignError && (
+                <Alert status="error">
+                    <AlertIcon />
+                    <AlertDescription>{execPreSignError.message}</AlertDescription>
+                </Alert>
             )}
         </Box>
     )
