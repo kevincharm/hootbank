@@ -1,8 +1,8 @@
 'use client'
 import { Box, Button, Input, Text } from '@chakra-ui/react'
-import { useWriteContract } from 'wagmi'
+import { useReadContract, useWaitForTransactionReceipt, useWriteContract } from 'wagmi'
 import DelayABI from '../abis/Delay'
-import { encodeFunctionData, formatUnits, parseUnits } from 'viem'
+import { encodeFunctionData, erc20Abi, formatUnits, parseUnits } from 'viem'
 import {
     OrderQuoteSideKindSell,
     SigningScheme,
@@ -11,18 +11,58 @@ import {
 } from '@cowprotocol/cow-sdk'
 import GPv2SettlementABI from '../abis/GPv2Settlement'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
-import { EURE_ADDRESS, SDAI_ADDRESS } from '@/config/addresses'
+import { use, useEffect, useState } from 'react'
 
 const chainId = 100
 const orderBookApi = new OrderBookApi({ chainId })
 
-interface DepositProps {
+interface OrderProps {
     safeAddress: `0x${string}`
     delayModuleAddress: `0x${string}`
+    sellToken: `0x${string}`
+    buyToken: `0x${string}`
+    onClose?: () => void
 }
-export function Deposit({ safeAddress, delayModuleAddress }: DepositProps) {
+
+export function Order({
+    safeAddress,
+    delayModuleAddress,
+    sellToken,
+    buyToken,
+    onClose,
+}: OrderProps) {
     const [sellAmount, setSellAmount] = useState<string>('')
+
+    const { data: txCooldown } = useReadContract({
+        address: delayModuleAddress,
+        abi: DelayABI,
+        functionName: 'txCooldown',
+        query: {
+            refetchOnWindowFocus: false,
+            refetchOnReconnect: false,
+        },
+    })
+
+    const { data: sellTokenSymbol } = useReadContract({
+        address: sellToken,
+        abi: erc20Abi,
+        functionName: 'symbol',
+    })
+    const { data: sellTokenDecimals } = useReadContract({
+        address: sellToken,
+        abi: erc20Abi,
+        functionName: 'decimals',
+    })
+    const { data: buyTokenSymbol } = useReadContract({
+        address: buyToken,
+        abi: erc20Abi,
+        functionName: 'symbol',
+    })
+    const { data: buyTokenDecimals } = useReadContract({
+        address: buyToken,
+        abi: erc20Abi,
+        functionName: 'decimals',
+    })
 
     const { data: quote } = useQuery({
         queryKey: ['getQuote', safeAddress, delayModuleAddress, sellAmount] as const,
@@ -31,8 +71,8 @@ export function Deposit({ safeAddress, delayModuleAddress }: DepositProps) {
             if (!sellAmount) return null
             const parsedSellAmount = parseUnits(sellAmount, 18 /** EURe decimals */).toString()
             const { quote } = await orderBookApi.getQuote({
-                sellToken: EURE_ADDRESS,
-                buyToken: SDAI_ADDRESS,
+                sellToken,
+                buyToken,
                 from: safeAddress,
                 receiver: safeAddress,
                 sellAmountBeforeFee: parsedSellAmount,
@@ -46,6 +86,12 @@ export function Deposit({ safeAddress, delayModuleAddress }: DepositProps) {
         retry: false,
     })
 
+    const {
+        writeContract: _queuePreSign,
+        status: queuePreSignStatus,
+        reset: resetQueuePreSign,
+        data: queuePreSignTxHash,
+    } = useWriteContract()
     const {
         mutate: sendOrder,
         data: sendOrderData,
@@ -62,6 +108,9 @@ export function Deposit({ safeAddress, delayModuleAddress }: DepositProps) {
                 signature: '0x',
                 signingScheme: SigningScheme.PRESIGN,
             })
+
+            console.log(`Order id: ${orderId}`)
+
             return {
                 orderId,
                 preSignCalldata: encodeFunctionData({
@@ -74,14 +123,8 @@ export function Deposit({ safeAddress, delayModuleAddress }: DepositProps) {
     })
     const { orderId, preSignCalldata } = sendOrderData || {}
 
-    const {
-        writeContract: _queuePreSign,
-        status: queuePreSignStatus,
-        reset: resetQueuePreSign,
-    } = useWriteContract()
-    const queuePreSign = () => {
+    useEffect(() => {
         if (!preSignCalldata) return
-
         _queuePreSign({
             address: delayModuleAddress,
             abi: DelayABI,
@@ -93,18 +136,18 @@ export function Deposit({ safeAddress, delayModuleAddress }: DepositProps) {
                 0 /** call */,
             ],
         })
-    }
+    }, [delayModuleAddress, preSignCalldata])
 
     const { writeContract: _execPreSign, status: execPreSignStatus } = useWriteContract({
         mutation: {
             onSuccess() {
-                resetQueuePreSign()
+                onClose?.()
             },
         },
     })
     const execPreSign = () => {
-        if (!preSignCalldata) return null
-
+        if (!preSignCalldata || !txCooldown) return
+        console.log('Executing presign...')
         _execPreSign({
             address: delayModuleAddress,
             abi: DelayABI,
@@ -129,48 +172,73 @@ export function Deposit({ safeAddress, delayModuleAddress }: DepositProps) {
         refetchInterval: 5000,
         enabled: Boolean(orderId),
     })
+    useEffect(() => {
+        if (!order) return
+        if (
+            order.status === 'fulfilled' ||
+            order.status === 'cancelled' ||
+            order.status === 'expired'
+        ) {
+            onClose?.()
+        }
+    }, [order])
 
     return (
         <Box>
             <Input
                 type="text"
-                placeholder="Deposit EURe amount"
+                placeholder="Amount"
                 value={sellAmount}
                 onChange={(event) => {
                     setSellAmount(event.target.value)
                 }}
             />
             {quote && (
+                <Box py={2}>
+                    {sellTokenDecimals && buyTokenDecimals && (
+                        <Text>
+                            Sell {formatUnits(BigInt(quote.sellAmount), sellTokenDecimals)}{' '}
+                            {sellTokenSymbol}, get{' '}
+                            {formatUnits(BigInt(quote.buyAmount), buyTokenDecimals)}{' '}
+                            {buyTokenSymbol}
+                        </Text>
+                    )}
+                </Box>
+            )}
+            <Box py={4}>
+                <Button
+                    onClick={() => sendOrder?.()}
+                    isLoading={
+                        sendOrderStatus === 'pending' ||
+                        queuePreSignStatus === 'pending' ||
+                        execPreSignStatus === 'pending'
+                    }
+                    disabled={!quote || sendOrderStatus !== 'idle' || queuePreSignStatus !== 'idle'}
+                >
+                    Send Order
+                </Button>
+                {queuePreSignStatus === 'success' && (
+                    <Button
+                        onClick={() => execPreSign()}
+                        isLoading={execPreSignStatus === 'pending'}
+                        disabled={execPreSignStatus !== 'idle'}
+                    >
+                        Execute Order
+                    </Button>
+                )}
+            </Box>
+            {order && (
                 <Box>
-                    <Text>
-                        Sell {formatUnits(BigInt(quote.sellAmount), 18)} EURe, get{' '}
-                        {formatUnits(BigInt(quote.buyAmount), 18)} sDAI
-                    </Text>
-                    {quote && !orderId && sendOrderStatus !== 'pending' && (
-                        <Button
-                            onClick={() => sendOrder?.()}
-                            disabled={sendOrderStatus === 'success'}
+                    <Box>Order status: {order.status}</Box>
+                    <Box>
+                        <a
+                            href={`https://explorer.cow.fi/gc/orders/${order.uid}`}
+                            target="_blank"
+                            referrerPolicy="no-referrer"
                         >
-                            Send Order
-                        </Button>
-                    )}
-                    {sendOrderData && queuePreSignStatus !== 'pending' && (
-                        <Button
-                            onClick={() => queuePreSign?.()}
-                            disabled={queuePreSignStatus === 'success'}
-                        >
-                            Sign & queue presignature
-                        </Button>
-                    )}
-                    {execPreSignStatus !== 'pending' && (
-                        <Button
-                            onClick={() => execPreSign?.()}
-                            disabled={execPreSignStatus === 'success'}
-                        >
-                            Execute order
-                        </Button>
-                    )}
-                    {order && <Box>Order status: {order.status}</Box>}
+                            Explorer
+                        </a>
+                    </Box>
                 </Box>
             )}
         </Box>

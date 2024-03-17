@@ -19,7 +19,7 @@ import DelayABI from '../../abis/Delay'
 import { erc20Abi, formatUnits, getAddress, isAddress } from 'viem'
 import { useRouter } from 'next/router'
 import { EURE_ADDRESS, SDAI_ADDRESS } from '@/config/addresses'
-import { Deposit } from '../../components/Deposit'
+import { Order } from '../../components/Order'
 
 export default function DelayModuleView() {
     const params = useParams<{ safeAddress: string }>()
@@ -69,6 +69,11 @@ export default function DelayModuleView() {
         onOpen: openDepositModal,
         onClose: closeDepositModal,
     } = useDisclosure()
+    const {
+        isOpen: isWithdrawModalOpen,
+        onOpen: openWithdrawModal,
+        onClose: closeWithdrawModal,
+    } = useDisclosure()
 
     return (
         <div>
@@ -110,7 +115,9 @@ export default function DelayModuleView() {
                             <Button variant="outline" mr={2} onClick={openDepositModal}>
                                 Deposit EURe
                             </Button>
-                            <Button variant="outline">Withdraw EURe</Button>
+                            <Button variant="outline" onClick={openWithdrawModal}>
+                                Withdraw EURe
+                            </Button>
                         </Box>
                         <Modal isOpen={isDepositModalOpen} onClose={closeDepositModal}>
                             <ModalOverlay />
@@ -123,11 +130,37 @@ export default function DelayModuleView() {
                                             <ModalHeader>Deposit</ModalHeader>
                                             <ModalCloseButton />
                                             <ModalBody>
-                                                <Deposit
+                                                <Order
                                                     safeAddress={safeAddress as `0x${string}`}
                                                     delayModuleAddress={
                                                         delayModuleAddress as `0x${string}`
                                                     }
+                                                    sellToken={EURE_ADDRESS}
+                                                    buyToken={SDAI_ADDRESS}
+                                                />
+                                            </ModalBody>
+                                        </ModalContent>
+                                    </>
+                                )}
+                        </Modal>
+                        <Modal isOpen={isWithdrawModalOpen} onClose={closeWithdrawModal}>
+                            <ModalOverlay />
+                            {safeAddress &&
+                                isAddress(getAddress(safeAddress)) &&
+                                delayModuleAddress &&
+                                isAddress(getAddress(delayModuleAddress)) && (
+                                    <>
+                                        <ModalContent>
+                                            <ModalHeader>Withdraw</ModalHeader>
+                                            <ModalCloseButton />
+                                            <ModalBody>
+                                                <Order
+                                                    safeAddress={safeAddress as `0x${string}`}
+                                                    delayModuleAddress={
+                                                        delayModuleAddress as `0x${string}`
+                                                    }
+                                                    sellToken={SDAI_ADDRESS}
+                                                    buyToken={EURE_ADDRESS}
                                                 />
                                             </ModalBody>
                                         </ModalContent>
